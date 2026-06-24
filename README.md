@@ -22,6 +22,12 @@ chmod +x tmp-proxy.sh
 ./tmp-proxy.sh start 'vless://...'
 ```
 
+Run without arguments to open the control menu:
+
+```bash
+./tmp-proxy.sh
+```
+
 Use the proxy in the same shell:
 
 ```bash
@@ -48,6 +54,18 @@ Stop:
 ./tmp-proxy.sh stop
 ```
 
+## Control Commands
+
+```bash
+./tmp-proxy.sh menu
+./tmp-proxy.sh restart-last
+./tmp-proxy.sh status
+./tmp-proxy.sh logs
+./tmp-proxy.sh set-ports 10808 10809
+```
+
+The menu can start a new link, restart the last saved link, stop the proxy, test connectivity, show proxy environment variables, view logs, update Xray, and change local listener ports.
+
 ## Release Package
 
 The release archive is a full offline package. It includes:
@@ -61,9 +79,9 @@ The release archive is a full offline package. It includes:
 On a server that cannot access GitHub, copy the full archive to the server and run:
 
 ```bash
-tar -xzf tmp-proxy-v1.0.0-linux-amd64-full.tar.gz
+tar -xzf tmp-proxy-v1.0.1-linux-amd64-full.tar.gz
 cd tmp-proxy
-./tmp-proxy.sh start 'vless://...'
+./tmp-proxy.sh
 eval "$(./tmp-proxy.sh env)"
 ```
 

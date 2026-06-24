@@ -12,8 +12,23 @@ CONFIG_FILE="$WORK_DIR/config.json"
 SUMMARY_FILE="$WORK_DIR/summary.txt"
 PID_FILE="$WORK_DIR/xray.pid"
 LOG_FILE="$WORK_DIR/xray.log"
+SETTINGS_FILE="$WORK_DIR/settings.env"
+LAST_LINK_FILE="$WORK_DIR/last-link.txt"
 SOCKS_PORT="${SOCKS_PORT:-10808}"
 HTTP_PORT="${HTTP_PORT:-10809}"
+
+if [[ -r "$SETTINGS_FILE" ]]; then
+    while IFS='=' read -r key value; do
+        case "$key" in
+            SOCKS_PORT)
+                [[ "$value" =~ ^[0-9]+$ ]] && SOCKS_PORT="$value"
+                ;;
+            HTTP_PORT)
+                [[ "$value" =~ ^[0-9]+$ ]] && HTTP_PORT="$value"
+                ;;
+        esac
+    done < "$SETTINGS_FILE"
+fi
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -31,13 +46,18 @@ usage() {
 tmp-proxy - temporary local proxy powered by Xray
 
 Usage:
+  ./tmp-proxy.sh                            Open control menu
+  ./tmp-proxy.sh menu                       Open control menu
   ./tmp-proxy.sh start '<share-link>'     Start in background
   ./tmp-proxy.sh run '<share-link>'       Run in foreground
   ./tmp-proxy.sh stop                     Stop background proxy
   ./tmp-proxy.sh restart '<share-link>'   Restart in background
+  ./tmp-proxy.sh restart-last              Restart with the last saved link
   ./tmp-proxy.sh status                   Show status
   ./tmp-proxy.sh test                     Test local SOCKS proxy
   ./tmp-proxy.sh env                      Print proxy env exports
+  ./tmp-proxy.sh logs                     Show recent Xray logs
+  ./tmp-proxy.sh set-ports SOCKS HTTP     Save local listener ports
   ./tmp-proxy.sh install-xray             Download/update Xray binary
 
 Environment:
@@ -51,6 +71,58 @@ Example:
   export HTTPS_PROXY=socks5h://127.0.0.1:10808
   export HTTP_PROXY=socks5h://127.0.0.1:10808
 EOF
+}
+
+pause() {
+    echo
+    read -r -p "按回车键继续..." _ || true
+}
+
+clear_screen() {
+    if [[ -t 1 ]] && command -v clear >/dev/null 2>&1; then
+        clear
+    fi
+}
+
+is_valid_port() {
+    local port="${1:-}"
+    [[ "$port" =~ ^[0-9]+$ ]] && (( 10#$port >= 1 && 10#$port <= 65535 ))
+}
+
+save_settings() {
+    mkdir -p "$WORK_DIR"
+    {
+        echo "SOCKS_PORT=$SOCKS_PORT"
+        echo "HTTP_PORT=$HTTP_PORT"
+    } > "$SETTINGS_FILE"
+    chmod 600 "$SETTINGS_FILE" 2>/dev/null || true
+}
+
+save_last_link() {
+    local link="$1"
+    mkdir -p "$WORK_DIR"
+    printf '%s\n' "$link" > "$LAST_LINK_FILE"
+    chmod 600 "$LAST_LINK_FILE" 2>/dev/null || true
+}
+
+get_last_link() {
+    [[ -r "$LAST_LINK_FILE" ]] && sed -n '1p' "$LAST_LINK_FILE"
+}
+
+current_node_summary() {
+    if [[ -r "$SUMMARY_FILE" ]]; then
+        sed -n '1p' "$SUMMARY_FILE"
+    else
+        echo "未加载"
+    fi
+}
+
+xray_version() {
+    if [[ -x "$XRAY_BIN" ]]; then
+        "$XRAY_BIN" version 2>/dev/null | head -n1
+    else
+        echo "未安装"
+    fi
 }
 
 detect_os_family() {
@@ -539,6 +611,7 @@ start_background() {
     generate_config "$link"
 
     "$XRAY_BIN" run -test -config "$CONFIG_FILE" >/dev/null
+    save_last_link "$link"
     nohup "$XRAY_BIN" run -config "$CONFIG_FILE" >"$LOG_FILE" 2>&1 &
     echo "$!" > "$PID_FILE"
     sleep 1
@@ -558,9 +631,21 @@ run_foreground() {
     ensure_xray
     generate_config "$link"
     "$XRAY_BIN" run -test -config "$CONFIG_FILE" >/dev/null
+    save_last_link "$link"
     show_started_message
     echo "Running in foreground. Press Ctrl+C to stop."
     exec "$XRAY_BIN" run -config "$CONFIG_FILE"
+}
+
+restart_last() {
+    local link
+    link="$(get_last_link)"
+    if [[ -z "$link" ]]; then
+        log_error "没有保存的上次节点链接，请先启动一次。"
+        return 1
+    fi
+    stop_proxy >/dev/null 2>&1 || true
+    start_background "$link"
 }
 
 status_proxy() {
@@ -577,6 +662,29 @@ status_proxy() {
         echo
         echo "Recent log:"
         tail -n 20 "$LOG_FILE" || true
+    fi
+}
+
+show_status_detail() {
+    status_proxy
+    echo
+    echo "Xray: $(xray_version)"
+    echo "工作目录: $WORK_DIR"
+    echo "配置文件: $CONFIG_FILE"
+    echo "日志文件: $LOG_FILE"
+    if [[ -r "$LAST_LINK_FILE" ]]; then
+        echo "上次节点: 已保存"
+    else
+        echo "上次节点: 未保存"
+    fi
+}
+
+show_logs() {
+    if [[ -f "$LOG_FILE" ]]; then
+        echo "===== $LOG_FILE ====="
+        tail -n 80 "$LOG_FILE"
+    else
+        log_warn "暂无日志。"
     fi
 }
 
@@ -597,6 +705,157 @@ test_proxy() {
     echo
 }
 
+set_ports() {
+    local socks_port="${1:-}"
+    local http_port="${2:-}"
+
+    if ! is_valid_port "$socks_port" || ! is_valid_port "$http_port"; then
+        log_error "端口必须是 1-65535 的数字。"
+        return 1
+    fi
+
+    if [[ "$socks_port" == "$http_port" ]]; then
+        log_error "SOCKS 和 HTTP 端口不能相同。"
+        return 1
+    fi
+
+    SOCKS_PORT="$socks_port"
+    HTTP_PORT="$http_port"
+    save_settings
+    log_success "端口已保存：SOCKS ${SOCKS_PORT} / HTTP ${HTTP_PORT}"
+    if is_running; then
+        log_warn "当前运行中的代理需要重启后才会使用新端口。"
+    fi
+}
+
+prompt_start_link() {
+    local link
+    echo
+    read -r -p "请输入 vless/ss/trojan/vmess 链接，直接回车取消: " link || true
+    if [[ -z "$link" ]]; then
+        log_warn "已取消。"
+        return 0
+    fi
+    start_background "$link"
+}
+
+prompt_set_ports() {
+    local socks_port http_port restart_choice
+    echo
+    read -r -p "SOCKS 端口 [当前 ${SOCKS_PORT}]: " socks_port || true
+    read -r -p "HTTP 端口 [当前 ${HTTP_PORT}]: " http_port || true
+
+    socks_port="${socks_port:-$SOCKS_PORT}"
+    http_port="${http_port:-$HTTP_PORT}"
+    if ! set_ports "$socks_port" "$http_port"; then
+        return 1
+    fi
+
+    if is_running; then
+        echo
+        read -r -p "是否立即用上次节点重启代理？[y/N]: " restart_choice || true
+        case "$restart_choice" in
+            y|Y|yes|YES)
+                restart_last
+                ;;
+            *)
+                log_warn "端口将在下次启动或重启后生效。"
+                ;;
+        esac
+    fi
+}
+
+show_env_help() {
+    echo "在当前 shell 使用代理，请执行："
+    echo
+    print_env
+    echo
+    echo "一键写入当前 shell："
+    echo "eval \"\$(./tmp-proxy.sh env)\""
+}
+
+show_menu_header() {
+    clear_screen
+    echo "========================================"
+    echo "          tmp-proxy 控制台"
+    echo "========================================"
+    if is_running; then
+        echo -e "状态: ${GREEN}运行中${NC}  PID: $(cat "$PID_FILE")"
+    else
+        echo -e "状态: ${YELLOW}未运行${NC}"
+    fi
+    echo "节点: $(current_node_summary)"
+    echo "SOCKS: 127.0.0.1:${SOCKS_PORT}"
+    echo "HTTP : 127.0.0.1:${HTTP_PORT}"
+    echo "Xray: $(xray_version)"
+    echo "工作目录: $WORK_DIR"
+    echo "========================================"
+    echo "1) 启动/更换代理链接"
+    echo "2) 使用上次链接重启"
+    echo "3) 停止代理"
+    echo "4) 查看状态/配置"
+    echo "5) 测试代理"
+    echo "6) 显示环境变量"
+    echo "7) 查看日志"
+    echo "8) 修改本地端口"
+    echo "9) 安装/更新 Xray"
+    echo "0) 退出"
+    echo "========================================"
+}
+
+main_menu() {
+    local choice
+    while true; do
+        show_menu_header
+        read -r -p "请选择: " choice || choice=0
+        case "$choice" in
+            1)
+                prompt_start_link || true
+                pause
+                ;;
+            2)
+                restart_last || true
+                pause
+                ;;
+            3)
+                stop_proxy || true
+                pause
+                ;;
+            4)
+                show_status_detail || true
+                pause
+                ;;
+            5)
+                test_proxy || true
+                pause
+                ;;
+            6)
+                show_env_help
+                pause
+                ;;
+            7)
+                show_logs
+                pause
+                ;;
+            8)
+                prompt_set_ports || true
+                pause
+                ;;
+            9)
+                install_xray || true
+                pause
+                ;;
+            0|q|Q)
+                exit 0
+                ;;
+            *)
+                log_warn "无效选项。"
+                pause
+                ;;
+        esac
+    done
+}
+
 require_link() {
     if [[ $# -lt 1 || -z "${1:-}" ]]; then
         log_error "Missing share link."
@@ -606,10 +865,13 @@ require_link() {
 }
 
 main() {
-    local command="${1:-help}"
+    local command="${1:-menu}"
     shift || true
 
     case "$command" in
+        menu)
+            main_menu
+            ;;
         start)
             require_link "$@"
             start_background "$1"
@@ -623,17 +885,30 @@ main() {
             stop_proxy || true
             start_background "$1"
             ;;
+        restart-last)
+            restart_last
+            ;;
         stop)
             stop_proxy
             ;;
         status)
-            status_proxy
+            show_status_detail
             ;;
         test)
             test_proxy
             ;;
         env)
             print_env
+            ;;
+        logs)
+            show_logs
+            ;;
+        set-ports)
+            if [[ $# -ne 2 ]]; then
+                log_error "Usage: ./tmp-proxy.sh set-ports SOCKS HTTP"
+                exit 1
+            fi
+            set_ports "$1" "$2"
             ;;
         install-xray)
             install_xray
