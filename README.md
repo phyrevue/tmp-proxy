@@ -30,9 +30,7 @@ Run without arguments to open the control menu:
 Use the proxy in the same shell:
 
 ```bash
-export ALL_PROXY=socks5h://127.0.0.1:10808
-export HTTPS_PROXY=http://127.0.0.1:10809
-export HTTP_PROXY=http://127.0.0.1:10809
+eval "$(./tmp-proxy.sh env)"
 ```
 
 Or print these commands:
@@ -61,9 +59,41 @@ Stop:
 ./tmp-proxy.sh status
 ./tmp-proxy.sh logs
 ./tmp-proxy.sh set-ports 10808 10809
+./tmp-proxy.sh system-proxy enable
+./tmp-proxy.sh system-proxy disable
+./tmp-proxy.sh system-proxy status
 ```
 
-The menu can start a new link, restart the last saved link, stop the proxy, test connectivity, show proxy environment variables, view logs, optionally update Xray, and change local listener ports.
+The menu can start a new link, restart the last saved link, stop the proxy, test connectivity, show proxy environment variables, manage system proxy exports, view logs, optionally update Xray, and change local listener ports.
+
+## System Proxy
+
+`./tmp-proxy.sh env` only prints commands for the current shell. To make new login shells automatically use tmp-proxy, enable the system profile:
+
+```bash
+sudo ./tmp-proxy.sh system-proxy enable
+source /etc/profile.d/tmp-proxy.sh
+```
+
+It writes:
+
+```bash
+export http_proxy=http://127.0.0.1:10809
+export https_proxy=http://127.0.0.1:10809
+export HTTP_PROXY=http://127.0.0.1:10809
+export HTTPS_PROXY=http://127.0.0.1:10809
+export all_proxy=socks5h://127.0.0.1:10808
+export ALL_PROXY=socks5h://127.0.0.1:10808
+```
+
+Disable it:
+
+```bash
+sudo ./tmp-proxy.sh system-proxy disable
+unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY all_proxy ALL_PROXY
+```
+
+If system proxy is already enabled, changing ports with `set-ports` or menu option 8 automatically rewrites `/etc/profile.d/tmp-proxy.sh` with the new ports.
 
 The full release package already includes `xray`, so domestic servers usually do not need to use the Xray update option. That option is only for repairing a missing binary or downloading a newer Xray release from GitHub.
 
@@ -80,7 +110,7 @@ The release archive is a full offline package. It includes:
 On a server that cannot access GitHub, copy the full archive to the server and run:
 
 ```bash
-tar -xzf tmp-proxy-v1.0.2-linux-amd64-full.tar.gz
+tar -xzf tmp-proxy-v1.0.3-linux-amd64-full.tar.gz
 cd tmp-proxy
 ./tmp-proxy.sh
 eval "$(./tmp-proxy.sh env)"
