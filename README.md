@@ -18,7 +18,6 @@ It starts local listeners:
 
 ```bash
 chmod +x tmp-proxy.sh
-./tmp-proxy.sh install-xray
 ./tmp-proxy.sh start 'vless://...'
 ```
 
@@ -32,8 +31,8 @@ Use the proxy in the same shell:
 
 ```bash
 export ALL_PROXY=socks5h://127.0.0.1:10808
-export HTTPS_PROXY=socks5h://127.0.0.1:10808
-export HTTP_PROXY=socks5h://127.0.0.1:10808
+export HTTPS_PROXY=http://127.0.0.1:10809
+export HTTP_PROXY=http://127.0.0.1:10809
 ```
 
 Or print these commands:
@@ -64,7 +63,9 @@ Stop:
 ./tmp-proxy.sh set-ports 10808 10809
 ```
 
-The menu can start a new link, restart the last saved link, stop the proxy, test connectivity, show proxy environment variables, view logs, update Xray, and change local listener ports.
+The menu can start a new link, restart the last saved link, stop the proxy, test connectivity, show proxy environment variables, view logs, optionally update Xray, and change local listener ports.
+
+The full release package already includes `xray`, so domestic servers usually do not need to use the Xray update option. That option is only for repairing a missing binary or downloading a newer Xray release from GitHub.
 
 ## Release Package
 
@@ -79,7 +80,7 @@ The release archive is a full offline package. It includes:
 On a server that cannot access GitHub, copy the full archive to the server and run:
 
 ```bash
-tar -xzf tmp-proxy-v1.0.1-linux-amd64-full.tar.gz
+tar -xzf tmp-proxy-v1.0.2-linux-amd64-full.tar.gz
 cd tmp-proxy
 ./tmp-proxy.sh
 eval "$(./tmp-proxy.sh env)"
@@ -87,10 +88,8 @@ eval "$(./tmp-proxy.sh env)"
 
 ## Notes
 
-If a server cannot access GitHub, copy this whole folder from another machine after running:
+If a server cannot access GitHub, use the full release package. It already includes `xray`, `geoip.dat`, and `geosite.dat`, so you can extract it and start the proxy directly.
 
-```bash
-./tmp-proxy.sh install-xray
-```
+The `install-xray` command and the Xray update menu option are optional. They require GitHub access and are only useful when you want to update or repair the local Xray binary.
 
-Then use `./tmp-proxy.sh start '<link>'` on the server. The script only needs the local `xray` binary plus Python 3 for parsing share links.
+The script needs Bash, Python 3, and the local `xray` binary included in the release package.

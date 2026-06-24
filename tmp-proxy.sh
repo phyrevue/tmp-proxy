@@ -68,8 +68,8 @@ Environment:
 Example:
   ./tmp-proxy.sh start 'vless://...'
   export ALL_PROXY=socks5h://127.0.0.1:10808
-  export HTTPS_PROXY=socks5h://127.0.0.1:10808
-  export HTTP_PROXY=socks5h://127.0.0.1:10808
+  export HTTPS_PROXY=http://127.0.0.1:10809
+  export HTTP_PROXY=http://127.0.0.1:10809
 EOF
 }
 
@@ -262,6 +262,34 @@ install_xray() {
     "$SCRIPT_DIR/xray" version | head -n1 || true
 }
 
+menu_install_xray() {
+    local choice
+
+    echo
+    if [[ -x "$XRAY_BIN" ]]; then
+        echo "完整包已自带 Xray，通常不需要执行此项。"
+        echo "当前版本: $(xray_version)"
+        echo
+        echo "只有在以下情况才建议继续："
+        echo "1) 想更新到 GitHub 上的最新版 Xray"
+        echo "2) 本地 xray 文件损坏或误删"
+        echo "3) 你手动换过目录，需要重新下载"
+        echo
+        read -r -p "继续从 GitHub 下载/覆盖 Xray？[y/N]: " choice || true
+        case "$choice" in
+            y|Y|yes|YES)
+                install_xray
+                ;;
+            *)
+                log_warn "已取消。直接选择 1 启动代理即可。"
+                ;;
+        esac
+    else
+        log_warn "当前目录未找到 Xray，将尝试下载。"
+        install_xray
+    fi
+}
+
 ensure_xray() {
     if [[ -x "$XRAY_BIN" ]]; then
         return 0
@@ -295,8 +323,11 @@ stop_proxy() {
 print_env() {
     cat <<EOF
 export ALL_PROXY=socks5h://127.0.0.1:${SOCKS_PORT}
-export HTTPS_PROXY=socks5h://127.0.0.1:${SOCKS_PORT}
-export HTTP_PROXY=socks5h://127.0.0.1:${SOCKS_PORT}
+export HTTPS_PROXY=http://127.0.0.1:${HTTP_PORT}
+export HTTP_PROXY=http://127.0.0.1:${HTTP_PORT}
+export all_proxy=socks5h://127.0.0.1:${SOCKS_PORT}
+export https_proxy=http://127.0.0.1:${HTTP_PORT}
+export http_proxy=http://127.0.0.1:${HTTP_PORT}
 EOF
 }
 
@@ -700,8 +731,11 @@ test_proxy() {
         https://www.gstatic.com/generate_204 | sed -n '1,8p'
     echo
     echo "Proxy exit IP:"
-    curl --socks5-hostname "127.0.0.1:${SOCKS_PORT}" -fsSL --connect-timeout 10 --max-time 25 \
-        https://ifconfig.me/ip || true
+    if ! curl --socks5-hostname "127.0.0.1:${SOCKS_PORT}" -fsSL --connect-timeout 8 --max-time 15 \
+        https://api.ipify.org; then
+        curl --socks5-hostname "127.0.0.1:${SOCKS_PORT}" -fsSL --connect-timeout 8 --max-time 15 \
+            https://ifconfig.me/ip || log_warn "无法查询出口 IP，但 204 连通性测试已通过。"
+    fi
     echo
 }
 
@@ -798,7 +832,7 @@ show_menu_header() {
     echo "6) 显示环境变量"
     echo "7) 查看日志"
     echo "8) 修改本地端口"
-    echo "9) 安装/更新 Xray"
+    echo "9) 检查/更新 Xray（可选）"
     echo "0) 退出"
     echo "========================================"
 }
@@ -842,7 +876,7 @@ main_menu() {
                 pause
                 ;;
             9)
-                install_xray || true
+                menu_install_xray || true
                 pause
                 ;;
             0|q|Q)
