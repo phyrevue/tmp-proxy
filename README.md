@@ -21,6 +21,17 @@ chmod +x tmp-proxy.sh
 ./tmp-proxy.sh start 'vless://...'
 ```
 
+Minimal dependencies:
+
+- Bash
+- Python 3
+
+The full package includes Xray, but it does not include Bash or Python. On minimal Alpine, install them first:
+
+```bash
+apk add --no-cache bash python3
+```
+
 Run without arguments to open the control menu:
 
 ```bash
@@ -66,6 +77,8 @@ Stop:
 
 The menu can start a new link, restart the last saved link, stop the proxy, test connectivity, show proxy environment variables, manage system proxy exports, view logs, optionally update Xray, and change local listener ports.
 
+Runtime files are kept in `/tmp/tmp-proxy`. Saved ports and the last successful link are kept in `~/.tmp-proxy`, so they survive a normal reboot.
+
 ## System Proxy
 
 `./tmp-proxy.sh env` only prints commands for the current shell. To make new login shells automatically use tmp-proxy, enable the system profile:
@@ -95,6 +108,8 @@ unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY all_proxy ALL_PROXY
 
 If system proxy is already enabled, changing ports with `set-ports` or menu option 8 automatically rewrites `/etc/profile.d/tmp-proxy.sh` with the new ports.
 
+System proxy only writes shell environment variables. It does not start Xray by itself, so start the proxy first with menu option 1 or `./tmp-proxy.sh start '<link>'`.
+
 The full release package already includes `xray`, so domestic servers usually do not need to use the Xray update option. That option is only for repairing a missing binary or downloading a newer Xray release from GitHub.
 
 ## Release Package
@@ -110,7 +125,7 @@ The release archive is a full offline package. It includes:
 On a server that cannot access GitHub, copy the full archive to the server and run:
 
 ```bash
-tar -xzf tmp-proxy-v1.0.3-linux-amd64-full.tar.gz
+tar -xzf tmp-proxy-v1.0.4-linux-amd64-full.tar.gz
 cd tmp-proxy
 ./tmp-proxy.sh
 eval "$(./tmp-proxy.sh env)"

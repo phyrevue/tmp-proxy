@@ -8,15 +8,32 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 XRAY_BIN="${XRAY_BIN:-$SCRIPT_DIR/xray}"
 WORK_DIR="${TMP_PROXY_WORK_DIR:-/tmp/tmp-proxy}"
+if [[ -n "${TMP_PROXY_STATE_DIR:-}" ]]; then
+    STATE_DIR="$TMP_PROXY_STATE_DIR"
+elif [[ -n "${TMP_PROXY_WORK_DIR:-}" ]]; then
+    STATE_DIR="$WORK_DIR"
+else
+    STATE_DIR="${HOME:-/tmp}/.tmp-proxy"
+fi
 CONFIG_FILE="$WORK_DIR/config.json"
 SUMMARY_FILE="$WORK_DIR/summary.txt"
 PID_FILE="$WORK_DIR/xray.pid"
 LOG_FILE="$WORK_DIR/xray.log"
-SETTINGS_FILE="$WORK_DIR/settings.env"
-LAST_LINK_FILE="$WORK_DIR/last-link.txt"
+SETTINGS_FILE="$STATE_DIR/settings.env"
+LAST_LINK_FILE="$STATE_DIR/last-link.txt"
 SYSTEM_PROXY_FILE="${TMP_PROXY_SYSTEM_PROXY_FILE:-/etc/profile.d/tmp-proxy.sh}"
 SOCKS_PORT="${SOCKS_PORT:-10808}"
 HTTP_PORT="${HTTP_PORT:-10809}"
+
+if [[ "$STATE_DIR" != "$WORK_DIR" ]]; then
+    mkdir -p "$STATE_DIR" 2>/dev/null || true
+    if [[ ! -f "$SETTINGS_FILE" && -f "$WORK_DIR/settings.env" ]]; then
+        cp "$WORK_DIR/settings.env" "$SETTINGS_FILE" 2>/dev/null || true
+    fi
+    if [[ ! -f "$LAST_LINK_FILE" && -f "$WORK_DIR/last-link.txt" ]]; then
+        cp "$WORK_DIR/last-link.txt" "$LAST_LINK_FILE" 2>/dev/null || true
+    fi
+fi
 
 if [[ -r "$SETTINGS_FILE" ]]; then
     while IFS='=' read -r key value; do
@@ -44,32 +61,32 @@ log_error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 
 usage() {
     cat <<EOF
-tmp-proxy - temporary local proxy powered by Xray
+tmp-proxy - 基于 Xray 的临时本地代理工具
 
-Usage:
-  ./tmp-proxy.sh                            Open control menu
-  ./tmp-proxy.sh menu                       Open control menu
-  ./tmp-proxy.sh start '<share-link>'     Start in background
-  ./tmp-proxy.sh run '<share-link>'       Run in foreground
-  ./tmp-proxy.sh stop                     Stop background proxy
-  ./tmp-proxy.sh restart '<share-link>'   Restart in background
-  ./tmp-proxy.sh restart-last              Restart with the last saved link
-  ./tmp-proxy.sh status                   Show status
-  ./tmp-proxy.sh test                     Test local SOCKS proxy
-  ./tmp-proxy.sh env                      Print proxy env exports
-  ./tmp-proxy.sh system-proxy enable      Enable system-wide proxy profile
-  ./tmp-proxy.sh system-proxy disable     Disable system-wide proxy profile
-  ./tmp-proxy.sh system-proxy status      Show system proxy profile status
-  ./tmp-proxy.sh logs                     Show recent Xray logs
-  ./tmp-proxy.sh set-ports SOCKS HTTP     Save local listener ports
-  ./tmp-proxy.sh install-xray             Download/update Xray binary
+用法:
+  ./tmp-proxy.sh                          打开控制菜单
+  ./tmp-proxy.sh menu                     打开控制菜单
+  ./tmp-proxy.sh start '<share-link>'     后台启动/切换代理
+  ./tmp-proxy.sh run '<share-link>'       前台运行代理
+  ./tmp-proxy.sh stop                     停止后台代理
+  ./tmp-proxy.sh restart '<share-link>'   重启并使用新链接
+  ./tmp-proxy.sh restart-last             使用上次链接重启
+  ./tmp-proxy.sh status                   查看状态
+  ./tmp-proxy.sh test                     测试本地代理
+  ./tmp-proxy.sh env                      输出当前 shell 代理变量
+  ./tmp-proxy.sh system-proxy enable      开启系统代理 profile
+  ./tmp-proxy.sh system-proxy disable     关闭系统代理 profile
+  ./tmp-proxy.sh system-proxy status      查看系统代理 profile
+  ./tmp-proxy.sh logs                     查看最近日志
+  ./tmp-proxy.sh set-ports SOCKS HTTP     保存本地监听端口
+  ./tmp-proxy.sh install-xray             下载/更新 Xray 二进制
 
-Environment:
+环境变量:
   SOCKS_PORT=10808
   HTTP_PORT=10809
   XRAY_BIN=$SCRIPT_DIR/xray
 
-Example:
+示例:
   ./tmp-proxy.sh start 'vless://...'
   eval "\$(./tmp-proxy.sh env)"
 EOF
@@ -92,7 +109,7 @@ is_valid_port() {
 }
 
 save_settings() {
-    mkdir -p "$WORK_DIR"
+    mkdir -p "$STATE_DIR"
     {
         echo "SOCKS_PORT=$SOCKS_PORT"
         echo "HTTP_PORT=$HTTP_PORT"
@@ -102,13 +119,16 @@ save_settings() {
 
 save_last_link() {
     local link="$1"
-    mkdir -p "$WORK_DIR"
+    mkdir -p "$STATE_DIR"
     printf '%s\n' "$link" > "$LAST_LINK_FILE"
     chmod 600 "$LAST_LINK_FILE" 2>/dev/null || true
 }
 
 get_last_link() {
-    [[ -r "$LAST_LINK_FILE" ]] && sed -n '1p' "$LAST_LINK_FILE"
+    if [[ -r "$LAST_LINK_FILE" ]]; then
+        sed -n '1p' "$LAST_LINK_FILE"
+    fi
+    return 0
 }
 
 current_node_summary() {
@@ -197,7 +217,11 @@ ensure_command() {
     install_packages "$@"
 }
 
-ensure_dependencies() {
+ensure_runtime_dependencies() {
+    ensure_command python3 python3
+}
+
+ensure_download_dependencies() {
     ensure_command curl curl ca-certificates
     ensure_command unzip unzip
     ensure_command python3 python3
@@ -243,10 +267,10 @@ latest_xray_tag() {
 }
 
 install_xray() {
-    ensure_dependencies
+    ensure_download_dependencies
 
     local tag asset url tmp
-    tag="$(latest_xray_tag)"
+    tag="$(latest_xray_tag || true)"
     if [[ -z "$tag" ]]; then
         log_error "Unable to get latest Xray release tag."
         return 1
@@ -311,25 +335,48 @@ ensure_xray() {
     install_xray
 }
 
+read_pid() {
+    local pid
+    [[ -r "$PID_FILE" ]] || return 1
+    pid="$(sed -n '1p' "$PID_FILE" 2>/dev/null || true)"
+    [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+    echo "$pid"
+}
+
+pid_matches_xray() {
+    local pid="$1"
+    local cmdline
+
+    if [[ ! -r "/proc/$pid/cmdline" ]]; then
+        return 1
+    fi
+
+    cmdline="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
+    [[ "$cmdline" == *"xray"* && "$cmdline" == *"$CONFIG_FILE"* ]]
+}
+
 is_running() {
-    [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" >/dev/null 2>&1
+    local pid
+    pid="$(read_pid)" || return 1
+    kill -0 "$pid" >/dev/null 2>&1 || return 1
+    pid_matches_xray "$pid"
 }
 
 stop_proxy() {
     if is_running; then
         local pid
-        pid="$(cat "$PID_FILE")"
-        log_info "Stopping Xray process: $pid"
+        pid="$(read_pid)"
+        log_info "正在停止 Xray 进程：$pid"
         kill "$pid" >/dev/null 2>&1 || true
         sleep 1
         if kill -0 "$pid" >/dev/null 2>&1; then
             kill -9 "$pid" >/dev/null 2>&1 || true
         fi
         rm -f "$PID_FILE"
-        log_success "Stopped."
+        log_success "代理已停止。"
     else
         rm -f "$PID_FILE"
-        log_warn "No running tmp-proxy process found."
+        log_warn "没有发现正在运行的 tmp-proxy 进程。"
     fi
 }
 
@@ -377,6 +424,9 @@ sync_system_proxy_if_enabled() {
 
 enable_system_proxy() {
     require_root_for_system_proxy || return 1
+    if ! is_running; then
+        log_warn "当前本地代理未运行。系统代理开启后，请先启动代理再使用网络命令。"
+    fi
     mkdir -p "$(dirname "$SYSTEM_PROXY_FILE")"
     generate_system_proxy_profile > "$SYSTEM_PROXY_FILE"
     chmod 644 "$SYSTEM_PROXY_FILE"
@@ -416,24 +466,29 @@ manage_system_proxy() {
     local choice
     while true; do
         echo
-        echo "========================================"
-        echo "          系统代理管理"
-        echo "========================================"
+        echo "============================================================"
+        echo "                      系统代理管理"
+        echo "============================================================"
         if system_proxy_enabled; then
-            echo -e "状态: ${GREEN}已启用${NC}"
+            echo -e "系统代理 : ${GREEN}已启用${NC}"
         else
-            echo -e "状态: ${YELLOW}未启用${NC}"
+            echo -e "系统代理 : ${YELLOW}未启用${NC}"
         fi
-        echo "文件: $SYSTEM_PROXY_FILE"
-        echo "HTTP : http://127.0.0.1:${HTTP_PORT}"
-        echo "SOCKS: socks5h://127.0.0.1:${SOCKS_PORT}"
-        echo "========================================"
-        echo "1) 启用/同步系统代理"
-        echo "2) 删除系统代理"
-        echo "3) 查看系统代理文件"
-        echo "4) 显示当前 shell 临时命令"
-        echo "0) 返回"
-        echo "========================================"
+        if is_running; then
+            echo -e "本地代理 : ${GREEN}运行中${NC}"
+        else
+            echo -e "本地代理 : ${YELLOW}未运行${NC}，启用系统代理前建议先启动代理"
+        fi
+        echo "配置文件 : $SYSTEM_PROXY_FILE"
+        echo "HTTP     : http://127.0.0.1:${HTTP_PORT}"
+        echo "SOCKS    : socks5h://127.0.0.1:${SOCKS_PORT}"
+        echo "------------------------------------------------------------"
+        echo "  1) 开启/同步系统代理"
+        echo "  2) 关闭系统代理"
+        echo "  3) 查看系统代理文件"
+        echo "  4) 显示当前 shell 临时命令"
+        echo "  0) 返回主菜单"
+        echo "============================================================"
         read -r -p "请选择: " choice || choice=0
         case "$choice" in
             1)
@@ -669,6 +724,8 @@ def parse_ss(link):
 
 def parse_vmess(link):
     raw = link[len("vmess://"):]
+    raw = raw.split("#", 1)[0]
+    raw = raw.split("?", 1)[0]
     data = json.loads(b64decode_text(raw))
     host = data.get("add")
     port = int(data.get("port", 0))
@@ -757,18 +814,20 @@ PY
 }
 
 show_started_message() {
-    log_success "Temporary proxy is ready."
+    log_success "代理已启动。"
     [[ -f "$SUMMARY_FILE" ]] && echo "节点: $(cat "$SUMMARY_FILE")"
     echo "SOCKS: 127.0.0.1:${SOCKS_PORT}"
     echo "HTTP : 127.0.0.1:${HTTP_PORT}"
     echo
-    echo "Use these variables in the current shell:"
-    print_env
+    echo "当前 shell 临时启用："
+    echo "eval \"\$(./tmp-proxy.sh env)\""
+    echo
+    echo "新登录 shell 自动启用：菜单 9 -> 1，或执行 ./tmp-proxy.sh system-proxy enable"
 }
 
 start_background() {
     local link="$1"
-    ensure_dependencies
+    ensure_runtime_dependencies
     ensure_xray
     stop_proxy >/dev/null 2>&1 || true
     generate_config "$link"
@@ -780,7 +839,7 @@ start_background() {
     sleep 1
 
     if ! is_running; then
-        log_error "Xray failed to start. Log:"
+        log_error "Xray 启动失败，最近日志如下："
         tail -n 80 "$LOG_FILE" 2>/dev/null || true
         return 1
     fi
@@ -790,13 +849,13 @@ start_background() {
 
 run_foreground() {
     local link="$1"
-    ensure_dependencies
+    ensure_runtime_dependencies
     ensure_xray
     generate_config "$link"
     "$XRAY_BIN" run -test -config "$CONFIG_FILE" >/dev/null
     save_last_link "$link"
     show_started_message
-    echo "Running in foreground. Press Ctrl+C to stop."
+    echo "前台运行中，按 Ctrl+C 停止。"
     exec "$XRAY_BIN" run -config "$CONFIG_FILE"
 }
 
@@ -813,18 +872,12 @@ restart_last() {
 
 status_proxy() {
     if is_running; then
-        log_success "Running, pid=$(cat "$PID_FILE")"
+        log_success "代理运行中，PID=$(read_pid)"
         [[ -f "$SUMMARY_FILE" ]] && echo "节点: $(cat "$SUMMARY_FILE")"
         echo "SOCKS: 127.0.0.1:${SOCKS_PORT}"
         echo "HTTP : 127.0.0.1:${HTTP_PORT}"
     else
-        log_warn "Not running."
-    fi
-
-    if [[ -f "$LOG_FILE" ]]; then
-        echo
-        echo "Recent log:"
-        tail -n 20 "$LOG_FILE" || true
+        log_warn "代理未运行。"
     fi
 }
 
@@ -833,6 +886,7 @@ show_status_detail() {
     echo
     echo "Xray: $(xray_version)"
     echo "工作目录: $WORK_DIR"
+    echo "状态目录: $STATE_DIR"
     echo "配置文件: $CONFIG_FILE"
     echo "日志文件: $LOG_FILE"
     if system_proxy_enabled; then
@@ -863,11 +917,11 @@ test_proxy() {
     fi
     ensure_command curl curl ca-certificates
 
-    echo "Testing SOCKS proxy..."
+    echo "正在测试 SOCKS 代理..."
     curl --socks5-hostname "127.0.0.1:${SOCKS_PORT}" -fsSIL --connect-timeout 10 --max-time 25 \
         https://www.gstatic.com/generate_204 | sed -n '1,8p'
     echo
-    echo "Proxy exit IP:"
+    echo "出口 IP:"
     if ! curl --socks5-hostname "127.0.0.1:${SOCKS_PORT}" -fsSL --connect-timeout 8 --max-time 15 \
         https://api.ipify.org; then
         curl --socks5-hostname "127.0.0.1:${SOCKS_PORT}" -fsSL --connect-timeout 8 --max-time 15 \
@@ -948,32 +1002,46 @@ show_env_help() {
 
 show_menu_header() {
     clear_screen
-    echo "========================================"
-    echo "          tmp-proxy 控制台"
-    echo "========================================"
-    if is_running; then
-        echo -e "状态: ${GREEN}运行中${NC}  PID: $(cat "$PID_FILE")"
+    local system_proxy_text
+    if system_proxy_enabled; then
+        system_proxy_text="已启用"
     else
-        echo -e "状态: ${YELLOW}未运行${NC}"
+        system_proxy_text="未启用"
     fi
-    echo "节点: $(current_node_summary)"
-    echo "SOCKS: 127.0.0.1:${SOCKS_PORT}"
-    echo "HTTP : 127.0.0.1:${HTTP_PORT}"
-    echo "Xray: $(xray_version)"
-    echo "工作目录: $WORK_DIR"
-    echo "========================================"
-    echo "1) 启动/更换代理链接"
-    echo "2) 使用上次链接重启"
-    echo "3) 停止代理"
-    echo "4) 查看状态/配置"
-    echo "5) 测试代理"
-    echo "6) 显示环境变量"
-    echo "7) 查看日志"
-    echo "8) 修改本地端口"
-    echo "9) 系统代理管理"
-    echo "10) 检查/更新 Xray（可选）"
-    echo "0) 退出"
-    echo "========================================"
+
+    echo "============================================================"
+    echo "                      tmp-proxy 控制台"
+    echo "============================================================"
+    if is_running; then
+        echo -e "代理状态 : ${GREEN}运行中${NC}  PID: $(read_pid)"
+    else
+        echo -e "代理状态 : ${YELLOW}未运行${NC}"
+    fi
+    echo "当前节点 : $(current_node_summary)"
+    echo "本地端口 : HTTP 127.0.0.1:${HTTP_PORT} | SOCKS 127.0.0.1:${SOCKS_PORT}"
+    echo "系统代理 : ${system_proxy_text} (${SYSTEM_PROXY_FILE})"
+    echo "Xray     : $(xray_version)"
+    echo "状态目录 : $STATE_DIR"
+    echo "------------------------------------------------------------"
+    echo "连接"
+    echo "  1) 启动/更换代理链接"
+    echo "  2) 使用上次链接重启"
+    echo "  3) 停止代理"
+    echo
+    echo "日常"
+    echo "  4) 查看状态/配置"
+    echo "  5) 测试代理连通性"
+    echo "  6) 显示当前 shell 代理命令"
+    echo
+    echo "配置"
+    echo "  7) 查看日志"
+    echo "  8) 修改本地端口"
+    echo "  9) 系统代理管理"
+    echo
+    echo "维护"
+    echo " 10) 检查/更新 Xray（可选）"
+    echo "  0) 退出"
+    echo "============================================================"
 }
 
 main_menu() {
