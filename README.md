@@ -73,22 +73,40 @@ Stop:
 ./tmp-proxy.sh system-proxy enable
 ./tmp-proxy.sh system-proxy disable
 ./tmp-proxy.sh system-proxy status
+./tmp-proxy.sh user-proxy enable
+./tmp-proxy.sh user-proxy disable
+./tmp-proxy.sh user-proxy status
 ```
 
-The menu can start a new link, restart the last saved link, stop the proxy, test connectivity, show proxy environment variables, manage system proxy exports, view logs, optionally update Xray, and change local listener ports.
+The menu can start a new link, restart the last saved link, stop the proxy, test connectivity, show proxy environment variables, manage proxy environment scopes, view logs, optionally update Xray, and change local listener ports.
 
 Runtime files are kept in `/tmp/tmp-proxy`. Saved ports and the last successful link are kept in `~/.tmp-proxy`, so they survive a normal reboot.
 
-## System Proxy
+## Proxy Scopes
 
-`./tmp-proxy.sh env` only prints commands for the current shell. To make new login shells automatically use tmp-proxy, enable the system profile:
+tmp-proxy supports three proxy environment scopes from menu option 9.
+
+Root-level system proxy writes `/etc/profile.d/tmp-proxy.sh` and requires root:
 
 ```bash
 sudo ./tmp-proxy.sh system-proxy enable
 source /etc/profile.d/tmp-proxy.sh
 ```
 
-It writes:
+User-level proxy writes `~/.tmp-proxy/user-proxy.sh` and adds a managed source block to the current user's shell rc file, such as `~/.bashrc` or `~/.zshrc`. It does not require root:
+
+```bash
+./tmp-proxy.sh user-proxy enable
+source ~/.tmp-proxy/user-proxy.sh
+```
+
+Current-shell temporary proxy does not write files:
+
+```bash
+eval "$(./tmp-proxy.sh env)"
+```
+
+All three scopes use the same generated variables:
 
 ```bash
 export http_proxy=http://127.0.0.1:10809
@@ -99,16 +117,23 @@ export all_proxy=socks5h://127.0.0.1:10808
 export ALL_PROXY=socks5h://127.0.0.1:10808
 ```
 
-Disable it:
+Disable root-level proxy:
 
 ```bash
 sudo ./tmp-proxy.sh system-proxy disable
 unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY all_proxy ALL_PROXY
 ```
 
-If system proxy is already enabled, changing ports with `set-ports` or menu option 8 automatically rewrites `/etc/profile.d/tmp-proxy.sh` with the new ports.
+Disable user-level proxy:
 
-System proxy only writes shell environment variables. It does not start Xray by itself, so start the proxy first with menu option 1 or `./tmp-proxy.sh start '<link>'`.
+```bash
+./tmp-proxy.sh user-proxy disable
+unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY all_proxy ALL_PROXY
+```
+
+If root-level or user-level proxy is already enabled, changing ports with `set-ports` or menu option 8 automatically rewrites the corresponding profile with the new ports.
+
+Proxy environment profiles only write shell environment variables. They do not start Xray by themselves, so start the proxy first with menu option 1 or `./tmp-proxy.sh start '<link>'`.
 
 The full release package already includes `xray`, so domestic servers usually do not need to use the Xray update option. That option is only for repairing a missing binary or downloading a newer Xray release from GitHub.
 
@@ -125,7 +150,7 @@ The release archive is a full offline package. It includes:
 On a server that cannot access GitHub, copy the full archive to the server and run:
 
 ```bash
-tar -xzf tmp-proxy-v1.0.4-linux-amd64-full.tar.gz
+tar -xzf tmp-proxy-v1.0.5-linux-amd64-full.tar.gz
 cd tmp-proxy
 ./tmp-proxy.sh
 eval "$(./tmp-proxy.sh env)"
