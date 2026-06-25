@@ -18,7 +18,7 @@ It starts local listeners:
 
 ```bash
 chmod +x tmp-proxy.sh
-./tmp-proxy.sh start 'vless://...'
+./tmp-proxy.sh
 ```
 
 Minimal dependencies:
@@ -32,13 +32,25 @@ The full package includes Xray, but it does not include Bash or Python. On minim
 apk add --no-cache bash python3
 ```
 
-Run without arguments to open the control menu:
+Choose menu option 1 for the recommended wizard:
 
-```bash
-./tmp-proxy.sh
+```text
+1) 推荐向导：启动/切换代理并选择生效范围
 ```
 
-Use the proxy in the same shell:
+The wizard does three things in order:
+
+- Paste a new share link, or press Enter to reuse the last one.
+- Start the local Xray proxy.
+- Choose where proxy environment variables should take effect.
+
+You can also run the wizard directly:
+
+```bash
+./tmp-proxy.sh wizard
+```
+
+For one-off usage in the current shell:
 
 ```bash
 eval "$(./tmp-proxy.sh env)"
@@ -66,6 +78,7 @@ Stop:
 
 ```bash
 ./tmp-proxy.sh menu
+./tmp-proxy.sh wizard
 ./tmp-proxy.sh restart-last
 ./tmp-proxy.sh status
 ./tmp-proxy.sh logs
@@ -78,7 +91,7 @@ Stop:
 ./tmp-proxy.sh user-proxy status
 ```
 
-The menu can start a new link, restart the last saved link, stop the proxy, test connectivity, show proxy environment variables, manage proxy environment scopes, view logs, optionally update Xray, and change local listener ports.
+The menu is organized around the common workflow: use option 1 first, then option 5 if you later want to change where proxy variables take effect.
 
 Runtime files are kept in `/tmp/tmp-proxy`. Saved ports and the last successful link are kept in `~/.tmp-proxy`, so they survive a normal reboot.
 
@@ -150,7 +163,7 @@ The release archive is a full offline package. It includes:
 On a server that cannot access GitHub, copy the full archive to the server and run:
 
 ```bash
-tar -xzf tmp-proxy-v1.0.5-linux-amd64-full.tar.gz
+tar -xzf tmp-proxy-v1.0.6-linux-amd64-full.tar.gz
 cd tmp-proxy
 ./tmp-proxy.sh
 eval "$(./tmp-proxy.sh env)"

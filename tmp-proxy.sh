@@ -82,6 +82,7 @@ tmp-proxy - 基于 Xray 的临时本地代理工具
 用法:
   ./tmp-proxy.sh                          打开控制菜单
   ./tmp-proxy.sh menu                     打开控制菜单
+  ./tmp-proxy.sh wizard                   推荐向导
   ./tmp-proxy.sh start '<share-link>'     后台启动/切换代理
   ./tmp-proxy.sh run '<share-link>'       前台运行代理
   ./tmp-proxy.sh stop                     停止后台代理
@@ -468,8 +469,17 @@ user_proxy_enabled() {
     [[ -f "$USER_PROXY_FILE" ]] && [[ -f "$USER_PROXY_RC_FILE" ]] && grep -Fq "$USER_PROXY_FILE" "$USER_PROXY_RC_FILE"
 }
 
+current_shell_proxy_enabled() {
+    local expected_http expected_socks
+    expected_http="http://127.0.0.1:${HTTP_PORT}"
+    expected_socks="socks5h://127.0.0.1:${SOCKS_PORT}"
+
+    { [[ "${http_proxy:-}" == "$expected_http" ]] || [[ "${HTTP_PROXY:-}" == "$expected_http" ]]; } &&
+        { [[ "${all_proxy:-}" == "$expected_socks" ]] || [[ "${ALL_PROXY:-}" == "$expected_socks" ]]; }
+}
+
 proxy_scope_summary() {
-    local root_status user_status
+    local root_status user_status shell_status
     if system_proxy_enabled; then
         root_status="root 已启用"
     else
@@ -482,7 +492,13 @@ proxy_scope_summary() {
         user_status="用户未启用"
     fi
 
-    echo "${root_status} | ${user_status}"
+    if current_shell_proxy_enabled; then
+        shell_status="当前 shell 已生效"
+    else
+        shell_status="当前 shell 未检测"
+    fi
+
+    echo "${root_status} | ${user_status} | ${shell_status}"
 }
 
 sync_system_proxy_if_enabled() {
@@ -712,7 +728,11 @@ manage_proxy_environment() {
         echo "============================================================"
         echo "Root 级别   : $(system_proxy_enabled && echo "已启用" || echo "未启用")"
         echo "用户级别    : $(user_proxy_enabled && echo "已启用" || echo "未启用")"
-        echo "当前 shell  : 手动执行 eval 后生效"
+        if current_shell_proxy_enabled; then
+            echo "当前 shell  : 已检测到代理变量"
+        else
+            echo "当前 shell  : 未检测到代理变量，可选 3 临时启用"
+        fi
         echo "HTTP        : http://127.0.0.1:${HTTP_PORT}"
         echo "SOCKS       : socks5h://127.0.0.1:${SOCKS_PORT}"
         echo "------------------------------------------------------------"
@@ -1048,7 +1068,7 @@ show_started_message() {
     echo "当前 shell 临时启用："
     echo "eval \"\$(./tmp-proxy.sh env)\""
     echo
-    echo "新登录 shell 自动启用：菜单 9 选择 root 级别或普通用户级别"
+    echo "新登录 shell 自动启用：菜单 5 选择普通用户级别或 root 级别"
 }
 
 start_background() {
@@ -1179,15 +1199,70 @@ set_ports() {
     fi
 }
 
-prompt_start_link() {
-    local link
+prompt_link_or_last() {
+    local link last_link
+    last_link="$(get_last_link)"
+    SELECTED_LINK=""
+
     echo
-    read -r -p "请输入 vless/ss/trojan/vmess 链接，直接回车取消: " link || true
+    if [[ -n "$last_link" ]]; then
+        echo "已保存上次节点。"
+        read -r -p "粘贴新链接，或直接回车使用上次节点: " link || true
+        link="${link:-$last_link}"
+    else
+        read -r -p "请输入 vless/ss/trojan/vmess 链接，直接回车取消: " link || true
+    fi
+
     if [[ -z "$link" ]]; then
         log_warn "已取消。"
-        return 0
+        return 1
     fi
-    start_background "$link"
+
+    SELECTED_LINK="$link"
+}
+
+apply_proxy_scope_prompt() {
+    local choice
+
+    while true; do
+        echo
+        echo "代理已经在本机端口启动。请选择让哪些命令使用它："
+        echo "  1) 普通用户级别（推荐，不需要 root，新 shell 自动生效）"
+        echo "  2) 当前 shell 临时生效（不写文件，复制/执行一行命令）"
+        echo "  3) Root 级别系统代理（需要 root，写入 /etc/profile.d）"
+        echo "  4) 暂不设置，只保持本地端口运行"
+        echo
+        read -r -p "请选择 [1-4，默认 1]: " choice || true
+        choice="${choice:-1}"
+
+        case "$choice" in
+            1)
+                enable_user_proxy
+                return 0
+                ;;
+            2)
+                show_env_help
+                return 0
+                ;;
+            3)
+                enable_system_proxy
+                return 0
+                ;;
+            4)
+                log_warn "已跳过代理环境设置。稍后可通过菜单 5 再设置。"
+                return 0
+                ;;
+            *)
+                log_warn "无效选项，请重新选择。"
+                ;;
+        esac
+    done
+}
+
+quick_start_wizard() {
+    prompt_link_or_last || return 0
+    start_background "$SELECTED_LINK" || return 1
+    apply_proxy_scope_prompt || true
 }
 
 prompt_set_ports() {
@@ -1242,23 +1317,18 @@ show_menu_header() {
     echo "Xray     : $(xray_version)"
     echo "状态目录 : $STATE_DIR"
     echo "------------------------------------------------------------"
-    echo "连接"
-    echo "  1) 启动/更换代理链接"
-    echo "  2) 使用上次链接重启"
+    echo "常用"
+    echo "  1) 推荐向导：启动/切换代理并选择生效范围"
+    echo "  2) 使用上次节点重启"
     echo "  3) 停止代理"
+    echo "  4) 测试代理连通性"
+    echo "  5) 代理生效范围（root / 用户 / 当前 shell）"
     echo
-    echo "日常"
-    echo "  4) 查看状态/配置"
-    echo "  5) 测试代理连通性"
-    echo "  6) 显示当前 shell 代理命令"
-    echo
-    echo "配置"
+    echo "高级"
+    echo "  6) 查看状态/配置"
     echo "  7) 查看日志"
     echo "  8) 修改本地端口"
-    echo "  9) 代理环境管理"
-    echo
-    echo "维护"
-    echo " 10) 检查/更新 Xray（可选）"
+    echo "  9) 检查/更新 Xray（可选）"
     echo "  0) 退出"
     echo "============================================================"
 }
@@ -1270,7 +1340,7 @@ main_menu() {
         read -r -p "请选择: " choice || choice=0
         case "$choice" in
             1)
-                prompt_start_link || true
+                quick_start_wizard || true
                 pause
                 ;;
             2)
@@ -1282,15 +1352,14 @@ main_menu() {
                 pause
                 ;;
             4)
-                show_status_detail || true
-                pause
-                ;;
-            5)
                 test_proxy || true
                 pause
                 ;;
+            5)
+                manage_proxy_environment || true
+                ;;
             6)
-                show_env_help
+                show_status_detail || true
                 pause
                 ;;
             7)
@@ -1302,9 +1371,6 @@ main_menu() {
                 pause
                 ;;
             9)
-                manage_proxy_environment || true
-                ;;
-            10)
                 menu_install_xray || true
                 pause
                 ;;
@@ -1334,6 +1400,9 @@ main() {
     case "$command" in
         menu)
             main_menu
+            ;;
+        wizard|quick)
+            quick_start_wizard
             ;;
         start)
             require_link "$@"
