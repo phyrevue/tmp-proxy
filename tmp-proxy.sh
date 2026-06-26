@@ -11,7 +11,6 @@ if [[ "${1:-}" == "on" || "${1:-}" == "activate" || "${1:-}" == "off" || "${1:-}
         exit 1
     fi
 
-    _TP_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     _TP_WORK_DIR="${TMP_PROXY_WORK_DIR:-/tmp/tmp-proxy}"
     if [[ -n "${TMP_PROXY_STATE_DIR:-}" ]]; then
         _TP_STATE_DIR="$TMP_PROXY_STATE_DIR"
@@ -50,7 +49,7 @@ if [[ "${1:-}" == "on" || "${1:-}" == "activate" || "${1:-}" == "off" || "${1:-}
         echo "[SUCCESS] 当前 shell 已取消 tmp-proxy 环境变量"
     fi
 
-    unset _TP_SCRIPT_DIR _TP_WORK_DIR _TP_STATE_DIR _TP_SETTINGS_FILE _TP_SOCKS_PORT _TP_HTTP_PORT _tp_key _tp_value
+    unset _TP_WORK_DIR _TP_STATE_DIR _TP_SETTINGS_FILE _TP_SOCKS_PORT _TP_HTTP_PORT _tp_key _tp_value
     return 0
 fi
 
@@ -149,6 +148,7 @@ tmp-proxy - 基于 Xray 的临时本地代理工具
   ./tmp-proxy.sh status                   查看状态
   ./tmp-proxy.sh test                     测试本地代理
   ./tmp-proxy.sh env                      输出当前 shell 代理变量
+  ./tmp-proxy.sh shell                    进入已启用代理变量的临时子 shell
   source ./tmp-proxy.sh on                直接启用当前 shell 代理变量
   source ./tmp-proxy.sh off               直接取消当前 shell 代理变量
   ./tmp-proxy.sh system-proxy enable      开启系统代理 profile
@@ -482,42 +482,60 @@ stop_proxy_wizard() {
     echo
     echo "如果只停止本地代理但保留这些环境变量，后续网络命令可能会连接失败。"
     echo "请选择是否一并关闭："
-    echo "  1) 只停止本地代理，保留代理环境"
-    user_proxy_enabled && echo "  2) 同时关闭用户级别代理"
-    system_proxy_enabled && echo "  3) 同时关闭 Root 级别代理"
-    echo "  4) 关闭可自动处理的代理环境，并显示当前 shell 取消命令"
+    echo "  1) 停止并清理可自动关闭的代理环境（推荐）"
+    echo "  2) 只停止本地代理，保留代理环境"
+    if user_proxy_enabled; then
+        echo "  3) 仅关闭用户级别代理"
+    else
+        echo "  3) 仅关闭用户级别代理（未启用）"
+    fi
+    if system_proxy_enabled; then
+        echo "  4) 仅关闭 Root 级别代理"
+    else
+        echo "  4) 仅关闭 Root 级别代理（未启用）"
+    fi
+    if current_shell_proxy_enabled; then
+        echo "  5) 显示当前终端取消命令"
+    else
+        echo "  5) 显示当前终端取消命令（未检测到）"
+    fi
     echo
     read -r -p "请选择 [默认 1]: " choice || true
     choice="${choice:-1}"
 
     case "$choice" in
         1)
-            log_warn "已保留代理环境。若当前 shell 已启用，可执行：source $SCRIPT_DIR/tmp-proxy.sh off"
+            if user_proxy_enabled; then
+                disable_user_proxy || true
+            fi
+            if system_proxy_enabled; then
+                disable_system_proxy || true
+            fi
+            if current_shell_proxy_enabled; then
+                show_current_shell_disable_hint
+            fi
             ;;
         2)
+            log_warn "已保留代理环境。若当前终端已启用，可执行：source $SCRIPT_DIR/tmp-proxy.sh off"
+            ;;
+        3)
             if user_proxy_enabled; then
                 disable_user_proxy || true
             else
                 log_warn "用户级别代理未启用。"
             fi
-            current_shell_proxy_enabled && echo "当前 shell 取消：source $SCRIPT_DIR/tmp-proxy.sh off"
+            current_shell_proxy_enabled && show_current_shell_disable_hint
             ;;
-        3)
+        4)
             if system_proxy_enabled; then
                 disable_system_proxy || true
             else
                 log_warn "Root 级别代理未启用。"
             fi
-            current_shell_proxy_enabled && echo "当前 shell 取消：source $SCRIPT_DIR/tmp-proxy.sh off"
+            current_shell_proxy_enabled && show_current_shell_disable_hint
             ;;
-        4)
-            if user_proxy_enabled; then
-                disable_user_proxy || true
-            fi
-            if system_proxy_enabled; then
-                disable_system_proxy || true
-            fi
-            echo "当前 shell 取消：source $SCRIPT_DIR/tmp-proxy.sh off"
+        5)
+            show_current_shell_disable_hint
             ;;
         *)
             log_warn "无效选项，已只停止本地代理。"
@@ -527,6 +545,45 @@ stop_proxy_wizard() {
 
 print_env() {
     proxy_exports
+}
+
+enter_proxy_subshell() {
+    local shell_bin
+    shell_bin="${SHELL:-/bin/sh}"
+
+    if [[ ! -x "$shell_bin" ]]; then
+        shell_bin="/bin/sh"
+    fi
+
+    if ! is_running; then
+        log_warn "当前本地代理未运行。子 shell 会带代理变量，但需要先启动代理才可联网。"
+    fi
+
+    echo
+    echo "即将进入已启用代理变量的临时子 shell。"
+    echo "退出这个临时环境请输入：exit"
+    echo
+    echo "HTTP : http://127.0.0.1:${HTTP_PORT}"
+    echo "SOCKS: socks5h://127.0.0.1:${SOCKS_PORT}"
+    echo
+
+    TMP_PROXY_ACTIVE=1 \
+    http_proxy="http://127.0.0.1:${HTTP_PORT}" \
+    https_proxy="http://127.0.0.1:${HTTP_PORT}" \
+    HTTP_PROXY="http://127.0.0.1:${HTTP_PORT}" \
+    HTTPS_PROXY="http://127.0.0.1:${HTTP_PORT}" \
+    all_proxy="socks5h://127.0.0.1:${SOCKS_PORT}" \
+    ALL_PROXY="socks5h://127.0.0.1:${SOCKS_PORT}" \
+        "$shell_bin" -i
+}
+
+show_current_shell_disable_hint() {
+    echo
+    echo "当前终端取消代理变量："
+    echo "source $SCRIPT_DIR/tmp-proxy.sh off"
+    echo
+    echo "说明：普通执行 ./tmp-proxy.sh 是子进程，不能直接修改或清除外层终端变量。"
+    echo "如果你是在临时代理子 shell 中，输入 exit 即可退出。"
 }
 
 generate_system_proxy_profile() {
@@ -856,27 +913,32 @@ manage_proxy_environment() {
         if current_shell_proxy_enabled; then
             echo "当前 shell  : 已检测到代理变量"
         else
-            echo "当前 shell  : 未检测到代理变量，可选 3 临时启用"
+            echo "当前 shell  : 未检测到代理变量，可选 2 进入临时子 shell，或选 3 查看 source 命令"
         fi
         echo "HTTP        : http://127.0.0.1:${HTTP_PORT}"
         echo "SOCKS       : socks5h://127.0.0.1:${SOCKS_PORT}"
         echo "------------------------------------------------------------"
-        echo "  1) Root 级别系统代理（写入 /etc/profile.d，需要 root）"
-        echo "  2) 普通用户级别代理（写入当前用户 shell 配置，不需要 root）"
-        echo "  3) 当前 shell 临时生效（source 一行命令，不写文件）"
+        echo "  1) 普通用户级别代理（推荐，新 shell 自动生效，不需要 root）"
+        echo "  2) 临时代理子 shell（立即可用，不写文件，exit 返回）"
+        echo "  3) 当前终端 source on/off（真正修改当前终端）"
+        echo "  4) Root 级别系统代理（写入 /etc/profile.d，需要 root）"
         echo "  0) 返回主菜单"
         echo "============================================================"
         read -r -p "请选择: " choice || choice=0
         case "$choice" in
             1)
-                manage_root_proxy || true
+                manage_user_proxy || true
                 ;;
             2)
-                manage_user_proxy || true
+                enter_proxy_subshell || true
+                pause
                 ;;
             3)
                 show_env_help || true
                 pause
+                ;;
+            4)
+                manage_root_proxy || true
                 ;;
             0|q|Q)
                 return 0
@@ -1190,7 +1252,10 @@ show_started_message() {
     echo "SOCKS: 127.0.0.1:${SOCKS_PORT}"
     echo "HTTP : 127.0.0.1:${HTTP_PORT}"
     echo
-    echo "当前 shell 临时启用："
+    echo "不写文件、立即使用："
+    echo "./tmp-proxy.sh shell"
+    echo
+    echo "真正让当前终端生效："
     echo "source $SCRIPT_DIR/tmp-proxy.sh on"
     echo
     echo "新登录 shell 自动启用：菜单 5 选择普通用户级别或 root 级别"
@@ -1353,11 +1418,12 @@ apply_proxy_scope_prompt() {
         echo
         echo "代理已经在本机端口启动。请选择让哪些命令使用它："
         echo "  1) 普通用户级别（推荐，不需要 root，新 shell 自动生效）"
-        echo "  2) 当前 shell 临时生效（不写文件，需要 source 一行命令）"
-        echo "  3) Root 级别系统代理（需要 root，写入 /etc/profile.d）"
-        echo "  4) 暂不设置，只保持本地端口运行"
+        echo "  2) 临时代理子 shell（立即可用，不写文件，exit 返回）"
+        echo "  3) 当前终端 source on/off（真正修改当前终端，需要复制一行）"
+        echo "  4) Root 级别系统代理（需要 root，写入 /etc/profile.d）"
+        echo "  5) 暂不设置，只保持本地端口运行"
         echo
-        read -r -p "请选择 [1-4，默认 1]: " choice || true
+        read -r -p "请选择 [1-5，默认 1]: " choice || true
         choice="${choice:-1}"
 
         case "$choice" in
@@ -1366,14 +1432,18 @@ apply_proxy_scope_prompt() {
                 return 0
                 ;;
             2)
-                show_env_help
+                enter_proxy_subshell
                 return 0
                 ;;
             3)
-                enable_system_proxy
+                show_env_help
                 return 0
                 ;;
             4)
+                enable_system_proxy
+                return 0
+                ;;
+            5)
                 log_warn "已跳过代理环境设置。稍后可通过菜单 5 再设置。"
                 return 0
                 ;;
@@ -1417,19 +1487,22 @@ prompt_set_ports() {
 }
 
 show_env_help() {
-    echo "当前 shell 临时启用，推荐执行："
+    echo "当前终端真正生效需要在当前终端执行 source。"
+    echo "这是 shell 机制限制：./tmp-proxy.sh 普通执行时处在子进程里，不能反向修改外层终端。"
+    echo
+    echo "启用当前终端代理："
     echo
     echo "source $SCRIPT_DIR/tmp-proxy.sh on"
     echo
-    echo "取消当前 shell 代理变量："
+    echo "取消当前终端代理："
     echo
     echo "source $SCRIPT_DIR/tmp-proxy.sh off"
     echo
-    echo "如果你更喜欢 eval，也可以执行："
+    echo "不想复制命令时，可以选择 [临时代理子 shell]，脚本会直接打开一个已启用代理的新 shell。"
+    echo
+    echo "当前端口对应的变量明细："
     echo
     print_env
-    echo
-    echo "eval \"\$(./tmp-proxy.sh env)\""
 }
 
 show_menu_header() {
@@ -1452,9 +1525,9 @@ show_menu_header() {
     echo "常用"
     echo "  1) 推荐向导：启动/切换代理并选择生效范围"
     echo "  2) 使用上次节点重启"
-    echo "  3) 停止代理"
+    echo "  3) 停止代理/清理环境"
     echo "  4) 测试代理连通性"
-    echo "  5) 代理生效范围（root / 用户 / 当前 shell）"
+    echo "  5) 代理生效范围（用户 / 临时 / root）"
     echo
     echo "高级"
     echo "  6) 查看状态/配置"
@@ -1563,6 +1636,9 @@ main() {
             ;;
         env)
             print_env
+            ;;
+        shell|proxy-shell)
+            enter_proxy_subshell
             ;;
         system-proxy)
             case "${1:-status}" in

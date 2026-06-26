@@ -68,6 +68,14 @@ Or print these commands:
 ./tmp-proxy.sh env
 ```
 
+If you do not want to copy/source commands, open a temporary proxy-enabled subshell:
+
+```bash
+./tmp-proxy.sh shell
+```
+
+Type `exit` to return to the original shell.
+
 Test:
 
 ```bash
@@ -89,6 +97,7 @@ Stop:
 ./tmp-proxy.sh status
 ./tmp-proxy.sh logs
 ./tmp-proxy.sh set-ports 10808 10809
+./tmp-proxy.sh shell
 source ./tmp-proxy.sh on
 source ./tmp-proxy.sh off
 ./tmp-proxy.sh system-proxy enable
@@ -99,13 +108,13 @@ source ./tmp-proxy.sh off
 ./tmp-proxy.sh user-proxy status
 ```
 
-The menu is organized around the common workflow: use option 1 first, then option 5 if you later want to change where proxy variables take effect.
+The menu is organized around the common workflow: use option 1 first, option 3 to stop and clean proxy environment settings, then option 5 if you later want to change where proxy variables take effect.
 
 Runtime files are kept in `/tmp/tmp-proxy`. Saved ports and the last successful link are kept in `~/.tmp-proxy`, so they survive a normal reboot.
 
 ## Proxy Scopes
 
-tmp-proxy supports three proxy environment scopes from menu option 5.
+tmp-proxy supports several proxy environment scopes from menu option 5.
 
 Root-level system proxy writes `/etc/profile.d/tmp-proxy.sh` and requires root:
 
@@ -120,6 +129,14 @@ User-level proxy writes `~/.tmp-proxy/user-proxy.sh` and adds a managed source b
 ./tmp-proxy.sh user-proxy enable
 source ~/.tmp-proxy/user-proxy.sh
 ```
+
+Temporary proxy subshell does not write files and does not require copying commands:
+
+```bash
+./tmp-proxy.sh shell
+```
+
+The proxy variables are already set inside that new shell. Type `exit` to return to the original shell.
 
 Current-shell temporary proxy does not write files:
 
@@ -159,6 +176,8 @@ If root-level or user-level proxy is already enabled, changing ports with `set-p
 
 Proxy environment profiles only write shell environment variables. They do not start Xray by themselves, so start the proxy first with menu option 1 or `./tmp-proxy.sh start '<link>'`.
 
+Menu option 3 stops the local Xray process and checks root-level, user-level, and inherited current-shell proxy variables. It can remove root/user profile files automatically when permissions allow it. Current-shell variables must be cleared with `source ./tmp-proxy.sh off`, or by leaving the temporary proxy subshell with `exit`.
+
 The full release package already includes `xray`, so domestic servers usually do not need to use the Xray update option. That option is only for repairing a missing binary or downloading a newer Xray release from GitHub.
 
 ## Release Package
@@ -174,10 +193,10 @@ The release archive is a full offline package. It includes:
 On a server that cannot access GitHub, copy the full archive to the server and run:
 
 ```bash
-tar -xzf tmp-proxy-v1.0.7-linux-amd64-full.tar.gz
+tar -xzf tmp-proxy-v1.0.8-linux-amd64-full.tar.gz
 cd tmp-proxy
 ./tmp-proxy.sh
-source ./tmp-proxy.sh on
+./tmp-proxy.sh shell
 ```
 
 ## Notes
