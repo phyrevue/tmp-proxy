@@ -53,7 +53,13 @@ You can also run the wizard directly:
 For one-off usage in the current shell:
 
 ```bash
-eval "$(./tmp-proxy.sh env)"
+source ./tmp-proxy.sh on
+```
+
+Disable it in the current shell:
+
+```bash
+source ./tmp-proxy.sh off
 ```
 
 Or print these commands:
@@ -83,6 +89,8 @@ Stop:
 ./tmp-proxy.sh status
 ./tmp-proxy.sh logs
 ./tmp-proxy.sh set-ports 10808 10809
+source ./tmp-proxy.sh on
+source ./tmp-proxy.sh off
 ./tmp-proxy.sh system-proxy enable
 ./tmp-proxy.sh system-proxy disable
 ./tmp-proxy.sh system-proxy status
@@ -97,7 +105,7 @@ Runtime files are kept in `/tmp/tmp-proxy`. Saved ports and the last successful 
 
 ## Proxy Scopes
 
-tmp-proxy supports three proxy environment scopes from menu option 9.
+tmp-proxy supports three proxy environment scopes from menu option 5.
 
 Root-level system proxy writes `/etc/profile.d/tmp-proxy.sh` and requires root:
 
@@ -116,8 +124,11 @@ source ~/.tmp-proxy/user-proxy.sh
 Current-shell temporary proxy does not write files:
 
 ```bash
-eval "$(./tmp-proxy.sh env)"
+source ./tmp-proxy.sh on
+source ./tmp-proxy.sh off
 ```
+
+Use `source` for current-shell mode because an executable child process cannot change the environment variables of the shell that launched it.
 
 All three scopes use the same generated variables:
 
@@ -134,14 +145,14 @@ Disable root-level proxy:
 
 ```bash
 sudo ./tmp-proxy.sh system-proxy disable
-unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY all_proxy ALL_PROXY
+source ./tmp-proxy.sh off
 ```
 
 Disable user-level proxy:
 
 ```bash
 ./tmp-proxy.sh user-proxy disable
-unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY all_proxy ALL_PROXY
+source ./tmp-proxy.sh off
 ```
 
 If root-level or user-level proxy is already enabled, changing ports with `set-ports` or menu option 8 automatically rewrites the corresponding profile with the new ports.
@@ -163,10 +174,10 @@ The release archive is a full offline package. It includes:
 On a server that cannot access GitHub, copy the full archive to the server and run:
 
 ```bash
-tar -xzf tmp-proxy-v1.0.6-linux-amd64-full.tar.gz
+tar -xzf tmp-proxy-v1.0.7-linux-amd64-full.tar.gz
 cd tmp-proxy
 ./tmp-proxy.sh
-eval "$(./tmp-proxy.sh env)"
+source ./tmp-proxy.sh on
 ```
 
 ## Notes

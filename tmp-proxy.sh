@@ -3,6 +3,64 @@
 # Temporary proxy launcher based on Xray-Core.
 # Supports common vless://, ss://, trojan:// and vmess:// share links.
 
+if [[ "${1:-}" == "on" || "${1:-}" == "activate" || "${1:-}" == "off" || "${1:-}" == "deactivate" ]]; then
+    if ! (return 0 2>/dev/null); then
+        echo "[ERROR] 当前 shell 生效/取消必须使用 source："
+        echo "  source ./tmp-proxy.sh on"
+        echo "  source ./tmp-proxy.sh off"
+        exit 1
+    fi
+
+    _TP_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    _TP_WORK_DIR="${TMP_PROXY_WORK_DIR:-/tmp/tmp-proxy}"
+    if [[ -n "${TMP_PROXY_STATE_DIR:-}" ]]; then
+        _TP_STATE_DIR="$TMP_PROXY_STATE_DIR"
+    elif [[ -n "${TMP_PROXY_WORK_DIR:-}" ]]; then
+        _TP_STATE_DIR="$TMP_PROXY_WORK_DIR"
+    else
+        _TP_STATE_DIR="${HOME:-/tmp}/.tmp-proxy"
+    fi
+    _TP_SETTINGS_FILE="$_TP_STATE_DIR/settings.env"
+    _TP_SOCKS_PORT="${SOCKS_PORT:-10808}"
+    _TP_HTTP_PORT="${HTTP_PORT:-10809}"
+
+    if [[ -r "$_TP_SETTINGS_FILE" ]]; then
+        while IFS='=' read -r _tp_key _tp_value; do
+            case "$_tp_key" in
+                SOCKS_PORT)
+                    [[ "$_tp_value" =~ ^[0-9]+$ ]] && _TP_SOCKS_PORT="$_tp_value"
+                    ;;
+                HTTP_PORT)
+                    [[ "$_tp_value" =~ ^[0-9]+$ ]] && _TP_HTTP_PORT="$_tp_value"
+                    ;;
+            esac
+        done < "$_TP_SETTINGS_FILE"
+    fi
+
+    if [[ "${1:-}" == "on" || "${1:-}" == "activate" ]]; then
+        export http_proxy="http://127.0.0.1:${_TP_HTTP_PORT}"
+        export https_proxy="http://127.0.0.1:${_TP_HTTP_PORT}"
+        export HTTP_PROXY="http://127.0.0.1:${_TP_HTTP_PORT}"
+        export HTTPS_PROXY="http://127.0.0.1:${_TP_HTTP_PORT}"
+        export all_proxy="socks5h://127.0.0.1:${_TP_SOCKS_PORT}"
+        export ALL_PROXY="socks5h://127.0.0.1:${_TP_SOCKS_PORT}"
+        echo "[SUCCESS] 当前 shell 已启用 tmp-proxy：HTTP ${_TP_HTTP_PORT} / SOCKS ${_TP_SOCKS_PORT}"
+    else
+        unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY all_proxy ALL_PROXY
+        echo "[SUCCESS] 当前 shell 已取消 tmp-proxy 环境变量"
+    fi
+
+    unset _TP_SCRIPT_DIR _TP_WORK_DIR _TP_STATE_DIR _TP_SETTINGS_FILE _TP_SOCKS_PORT _TP_HTTP_PORT _tp_key _tp_value
+    return 0
+fi
+
+if (return 0 2>/dev/null); then
+    echo "[ERROR] source 模式只支持 on/off："
+    echo "  source ./tmp-proxy.sh on"
+    echo "  source ./tmp-proxy.sh off"
+    return 1
+fi
+
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -91,6 +149,8 @@ tmp-proxy - 基于 Xray 的临时本地代理工具
   ./tmp-proxy.sh status                   查看状态
   ./tmp-proxy.sh test                     测试本地代理
   ./tmp-proxy.sh env                      输出当前 shell 代理变量
+  source ./tmp-proxy.sh on                直接启用当前 shell 代理变量
+  source ./tmp-proxy.sh off               直接取消当前 shell 代理变量
   ./tmp-proxy.sh system-proxy enable      开启系统代理 profile
   ./tmp-proxy.sh system-proxy disable     关闭系统代理 profile
   ./tmp-proxy.sh system-proxy status      查看系统代理 profile
@@ -108,7 +168,7 @@ tmp-proxy - 基于 Xray 的临时本地代理工具
 
 示例:
   ./tmp-proxy.sh start 'vless://...'
-  eval "\$(./tmp-proxy.sh env)"
+  source ./tmp-proxy.sh on
 EOF
 }
 
@@ -400,6 +460,71 @@ stop_proxy() {
     fi
 }
 
+stop_proxy_wizard() {
+    local choice any_enabled
+
+    stop_proxy || true
+
+    any_enabled=0
+    system_proxy_enabled && any_enabled=1
+    user_proxy_enabled && any_enabled=1
+    current_shell_proxy_enabled && any_enabled=1
+
+    if [[ "$any_enabled" -eq 0 ]]; then
+        return 0
+    fi
+
+    echo
+    echo "检测到还有代理环境变量/配置可能生效："
+    system_proxy_enabled && echo "  - Root 级别代理已启用：$SYSTEM_PROXY_FILE"
+    user_proxy_enabled && echo "  - 用户级别代理已启用：$USER_PROXY_FILE"
+    current_shell_proxy_enabled && echo "  - 当前 shell 检测到代理变量"
+    echo
+    echo "如果只停止本地代理但保留这些环境变量，后续网络命令可能会连接失败。"
+    echo "请选择是否一并关闭："
+    echo "  1) 只停止本地代理，保留代理环境"
+    user_proxy_enabled && echo "  2) 同时关闭用户级别代理"
+    system_proxy_enabled && echo "  3) 同时关闭 Root 级别代理"
+    echo "  4) 关闭可自动处理的代理环境，并显示当前 shell 取消命令"
+    echo
+    read -r -p "请选择 [默认 1]: " choice || true
+    choice="${choice:-1}"
+
+    case "$choice" in
+        1)
+            log_warn "已保留代理环境。若当前 shell 已启用，可执行：source $SCRIPT_DIR/tmp-proxy.sh off"
+            ;;
+        2)
+            if user_proxy_enabled; then
+                disable_user_proxy || true
+            else
+                log_warn "用户级别代理未启用。"
+            fi
+            current_shell_proxy_enabled && echo "当前 shell 取消：source $SCRIPT_DIR/tmp-proxy.sh off"
+            ;;
+        3)
+            if system_proxy_enabled; then
+                disable_system_proxy || true
+            else
+                log_warn "Root 级别代理未启用。"
+            fi
+            current_shell_proxy_enabled && echo "当前 shell 取消：source $SCRIPT_DIR/tmp-proxy.sh off"
+            ;;
+        4)
+            if user_proxy_enabled; then
+                disable_user_proxy || true
+            fi
+            if system_proxy_enabled; then
+                disable_system_proxy || true
+            fi
+            echo "当前 shell 取消：source $SCRIPT_DIR/tmp-proxy.sh off"
+            ;;
+        *)
+            log_warn "无效选项，已只停止本地代理。"
+            ;;
+    esac
+}
+
 print_env() {
     proxy_exports
 }
@@ -551,7 +676,7 @@ disable_system_proxy() {
     fi
     echo
     echo "如果当前 shell 已经 source 过代理变量，可手动取消："
-    echo "unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY all_proxy ALL_PROXY"
+    echo "source $SCRIPT_DIR/tmp-proxy.sh off"
 }
 
 enable_user_proxy() {
@@ -580,7 +705,7 @@ disable_user_proxy() {
     echo "已移除自动加载配置: $USER_PROXY_RC_FILE"
     echo
     echo "如果当前 shell 已经加载过代理变量，可手动取消："
-    echo "unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY all_proxy ALL_PROXY"
+    echo "source $SCRIPT_DIR/tmp-proxy.sh off"
 }
 
 show_system_proxy_status() {
@@ -738,7 +863,7 @@ manage_proxy_environment() {
         echo "------------------------------------------------------------"
         echo "  1) Root 级别系统代理（写入 /etc/profile.d，需要 root）"
         echo "  2) 普通用户级别代理（写入当前用户 shell 配置，不需要 root）"
-        echo "  3) 当前 shell 临时生效（不写文件，不需要 root）"
+        echo "  3) 当前 shell 临时生效（source 一行命令，不写文件）"
         echo "  0) 返回主菜单"
         echo "============================================================"
         read -r -p "请选择: " choice || choice=0
@@ -1066,7 +1191,7 @@ show_started_message() {
     echo "HTTP : 127.0.0.1:${HTTP_PORT}"
     echo
     echo "当前 shell 临时启用："
-    echo "eval \"\$(./tmp-proxy.sh env)\""
+    echo "source $SCRIPT_DIR/tmp-proxy.sh on"
     echo
     echo "新登录 shell 自动启用：菜单 5 选择普通用户级别或 root 级别"
 }
@@ -1228,7 +1353,7 @@ apply_proxy_scope_prompt() {
         echo
         echo "代理已经在本机端口启动。请选择让哪些命令使用它："
         echo "  1) 普通用户级别（推荐，不需要 root，新 shell 自动生效）"
-        echo "  2) 当前 shell 临时生效（不写文件，复制/执行一行命令）"
+        echo "  2) 当前 shell 临时生效（不写文件，需要 source 一行命令）"
         echo "  3) Root 级别系统代理（需要 root，写入 /etc/profile.d）"
         echo "  4) 暂不设置，只保持本地端口运行"
         echo
@@ -1292,11 +1417,18 @@ prompt_set_ports() {
 }
 
 show_env_help() {
-    echo "在当前 shell 使用代理，请执行："
+    echo "当前 shell 临时启用，推荐执行："
+    echo
+    echo "source $SCRIPT_DIR/tmp-proxy.sh on"
+    echo
+    echo "取消当前 shell 代理变量："
+    echo
+    echo "source $SCRIPT_DIR/tmp-proxy.sh off"
+    echo
+    echo "如果你更喜欢 eval，也可以执行："
     echo
     print_env
     echo
-    echo "一键写入当前 shell："
     echo "eval \"\$(./tmp-proxy.sh env)\""
 }
 
@@ -1348,7 +1480,7 @@ main_menu() {
                 pause
                 ;;
             3)
-                stop_proxy || true
+                stop_proxy_wizard || true
                 pause
                 ;;
             4)
